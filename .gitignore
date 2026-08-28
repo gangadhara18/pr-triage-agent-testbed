@@ -1,0 +1,11 @@
+# Secrets — never commit real credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS clutter
+.DS_Store
