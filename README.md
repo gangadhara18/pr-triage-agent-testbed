@@ -14,7 +14,8 @@ For any pull request, the agent:
 2. **Flags risk**: is this a breaking change? Does it touch anything security-sensitive? Is there a test coverage gap?
 3. **Suggests a specific fix** when something is flagged — not just "this looks risky," but a concrete next step a reviewer can evaluate and act on.
 4. **Suggests a reviewer**, based on who's actually worked on the changed files before.
-5. **Posts all of it as a comment** on the real PR, clearly labeled as an automated, advisory analysis — not a decision.
+5. **Waits for a human decision** in a review dashboard — Accept, Modify, or Reject — before anything gets posted publicly. Every decision is logged permanently, including rejections.
+6. **Posts the (possibly edited) result** as a comment on the real PR, clearly labeled as an automated, advisory analysis — not a decision.
 
 ## A real example
 
@@ -40,17 +41,32 @@ Here's an actual comment the agent posted on a test PR that introduced a hardcod
 
 The agent caught this without being told to look for security issues specifically — it reasoned about the code's actual behavior, not just its syntax.
 
+## The review dashboard (Phase 2)
+
+Rather than posting immediately, the agent's findings go into a review queue first. A small local dashboard shows each pending suggestion — summary, risk flags, suggested fix, suggested reviewer — with three actions:
+
+- **Accept** — posts the comment to GitHub exactly as generated.
+- **Modify** — lets you edit the comment text before it posts.
+- **Reject** — nothing gets posted; the rejection (with an optional reason) is logged instead.
+
+Every decision, including rejections, is saved permanently to a database — a real audit trail of what the agent suggested versus what a human actually did with it, not just a one-off approval prompt.
+
 ## How it's built
 
 ```
-GitHub PR  →  Fetch diff & file history  →  Three AI/logic steps  →  Comment posted back to GitHub
+GitHub PR → Fetch diff & file history → Three AI/logic steps → Saved to database (pending review)
+                                                                        ↓
+                                                    Dashboard: Accept / Modify / Reject
+                                                                        ↓
+                                                    Decision logged  →  Comment posted to GitHub (if approved)
 ```
 
 - **Summarizer** — sends the diff to Claude, asks for a plain-language explanation.
-- **Risk Classifier** — sends the same diff to Claude, asks for structured yes/no risk flags plus reasoning.
+- **Risk Classifier** — sends the same diff to Claude, asks for structured yes/no risk flags plus reasoning and a suggested fix.
 - **Reviewer Matcher** — no AI here on purpose. It's a solved problem: count who's committed to these files before, exclude the PR's own author, suggest the top match. Using an LLM for this would just be unnecessary complexity.
+- **Dashboard & database** — a FastAPI backend with three tables (PRs, suggestions, and human decisions) and a small web UI, so nothing reaches GitHub without an explicit human decision, and every decision is recorded.
 
-**Tech stack:** Python, FastAPI-ready structure, the Claude API (`anthropic` Python SDK), GitHub's REST API, PostgreSQL (planned for Phase 2).
+**Tech stack:** Python, FastAPI, the Claude API (`anthropic` SDK), GitHub's REST API, PostgreSQL + SQLAlchemy.
 
 ## Honest limitations (found while building this)
 
@@ -66,7 +82,6 @@ Tools like GitHub Copilot's PR review, CodeRabbit, and Sonar already do AI-assis
 
 ## Roadmap (not yet built)
 
-- **Phase 2:** a small dashboard where a reviewer can Accept, Modify, or Reject each suggestion, with every decision logged — building a real feedback trail instead of just one-off comments.
 - **Phase 3:** low-risk automation, like auto-labeling trivial PRs (still no auto-merge or auto-approve).
 - **Auto-applying suggested fixes:** currently the agent only suggests a fix in plain language for a human to evaluate — it never generates or applies a code change itself. Deliberately left as advisory-only for now; auto-applying fixes would be a meaningful escalation in the agent's authority and deserves its own careful decision later, not something added casually.
 
@@ -74,5 +89,7 @@ Tools like GitHub Copilot's PR review, CodeRabbit, and Sonar already do AI-assis
 
 1. Clone this repo and create a Python virtual environment.
 2. `pip install -r requirements.txt`
-3. Copy `.env.example` to `.env` and add your own GitHub token and Anthropic API key.
-4. Run any of the `test_*.py` scripts to see each part of the pipeline individually, or `test_post_comment.py` for the full end-to-end flow (it asks for confirmation before posting anything).
+3. Copy `.env.example` to `.env` and add your own GitHub token, Anthropic API key, and PostgreSQL connection details.
+4. Create the database tables: `python create_tables.py`
+5. Run any of the `test_*.py` scripts to see each part of the pipeline individually, or `test_post_comment.py` for the original end-to-end flow (Phase 1 style — posts immediately after a terminal confirmation).
+6. To use the review dashboard instead: start the server with `uvicorn app.main:app --reload`, then open `http://127.0.0.1:8000` in a browser. Trigger a triage via `POST /api/triage/{pr_number}` (e.g. with curl or the included `test_api.py`), then review it in the dashboard.
