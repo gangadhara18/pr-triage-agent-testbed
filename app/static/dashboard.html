@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PR Triage Agent — Review Queue</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Arial, sans-serif;
+    background: #f5f6f8;
+    color: #1a1a1a;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 22px;
+  }
+  .subtitle {
+    color: #666;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 17px;
+    margin: 0 0 4px 0;
+  }
+  .card h2 a {
+    color: #1a1a1a;
+    text-decoration: none;
+  }
+  .card h2 a:hover {
+    text-decoration: underline;
+  }
+  .summary {
+    color: #333;
+    margin: 12px 0;
+    line-height: 1.5;
+  }
+  .flags {
+    display: flex;
+    gap: 8px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+  }
+  .flag {
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: #eee;
+  }
+  .flag.risky {
+    background: #fde4e1;
+    color: #a4291b;
+  }
+  .flag.warn {
+    background: #fff3cd;
+    color: #8a6800;
+  }
+  .fix-box {
+    background: #f0f7ff;
+    border-left: 3px solid #4a90d9;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background: white;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button.accept {
+    background: #2a9d5c;
+    color: white;
+    border: none;
+  }
+  button.reject {
+    background: #d64545;
+    color: white;
+    border: none;
+  }
+  textarea {
+    width: 100%;
+    height: 220px;
+    margin-top: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    padding: 10px;
+    box-sizing: border-box;
+  }
+  .note-box {
+    margin-top: 10px;
+    display: none;
+  }
+  .note-box input {
+    width: 100%;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .result {
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .result.posted {
+    background: #e3f5e9;
+    color: #1a5c33;
+  }
+  .result.rejected {
+    background: #fde4e1;
+    color: #a4291b;
+  }
+  .empty {
+    color: #666;
+    text-align: center;
+    padding: 40px 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>🤖 PR Triage Agent — Review Queue</h1>
+<div class="subtitle">Pending suggestions awaiting your decision. Nothing gets posted until you accept or modify it.</div>
+
+<div id="queue">Loading...</div>
+
+<script>
+async function loadQueue() {
+  const res = await fetch('/api/suggestions/pending');
+  const items = await res.json();
+  const queue = document.getElementById('queue');
+
+  if (items.length === 0) {
+    queue.innerHTML = '<div class="empty">No pending suggestions. Trigger a new triage via the API to add one.</div>';
+    return;
+  }
+
+  queue.innerHTML = items.map(item => renderCard(item)).join('');
+}
+
+function flagHtml(label, isFlagged, cssClass) {
+  const cls = isFlagged ? cssClass : 'flag';
+  const icon = isFlagged ? (cssClass === 'risky' ? '🔴' : '🟡') : '⚪';
+  return `<span class="flag ${isFlagged ? cssClass : ''}">${icon} ${label}: ${isFlagged}</span>`;
+}
+
+function renderCard(item) {
+  return `
+    <div class="card" id="card-${item.suggestion_id}">
+      <h2><a href="${item.pr_url}" target="_blank">PR #${item.pr_number}: ${item.pr_title}</a></h2>
+      <div class="summary">${item.summary}</div>
+      <div class="flags">
+        ${flagHtml('Breaking change', item.breaking_change, 'risky')}
+        ${flagHtml('Security sensitive', item.security_sensitive, 'risky')}
+        ${flagHtml('Test coverage gap', item.test_coverage_gap, 'warn')}
+      </div>
+      ${item.suggested_fix ? `<div class="fix-box"><strong>Suggested Fix:</strong> ${item.suggested_fix}</div>` : ''}
+      <div><strong>Suggested Reviewer:</strong> ${item.suggested_reviewer || 'None — assign manually'}</div>
+
+      <textarea id="text-${item.suggestion_id}" style="display:none;">${item.comment_preview}</textarea>
+
+      <div class="note-box" id="note-${item.suggestion_id}">
+        <input type="text" id="note-input-${item.suggestion_id}" placeholder="Optional reason for rejecting...">
+      </div>
+
+      <div class="actions">
+        <button class="accept" onclick="decide(${item.suggestion_id}, 'accepted')">Accept</button>
+        <button onclick="toggleModify(${item.suggestion_id})">Modify</button>
+        <button class="reject" onclick="toggleReject(${item.suggestion_id})">Reject</button>
+      </div>
+
+      <div id="result-${item.suggestion_id}"></div>
+    </div>
+  `;
+}
+
+function toggleModify(id) {
+  const textarea = document.getElementById(`text-${id}`);
+  const isHidden = textarea.style.display === 'none';
+  textarea.style.display = isHidden ? 'block' : 'none';
+
+  if (isHidden) {
+    const actions = textarea.closest('.card').querySelector('.actions');
+    if (!document.getElementById(`confirm-modify-${id}`)) {
+      const btn = document.createElement('button');
+      btn.id = `confirm-modify-${id}`;
+      btn.className = 'accept';
+      btn.textContent = 'Post Modified Version';
+      btn.onclick = () => decide(id, 'modified');
+      actions.appendChild(btn);
+    }
+  }
+}
+
+function toggleReject(id) {
+  const noteBox = document.getElementById(`note-${id}`);
+  const isHidden = noteBox.style.display === 'none' || noteBox.style.display === '';
+  noteBox.style.display = isHidden ? 'block' : 'none';
+
+  if (isHidden && !document.getElementById(`confirm-reject-${id}`)) {
+    const actions = noteBox.closest('.card').querySelector('.actions');
+    const btn = document.createElement('button');
+    btn.id = `confirm-reject-${id}`;
+    btn.className = 'reject';
+    btn.textContent = 'Confirm Reject';
+    btn.onclick = () => decide(id, 'rejected');
+    actions.appendChild(btn);
+  }
+}
+
+async function decide(id, decision) {
+  const payload = { suggestion_id: id, decision: decision };
+
+  if (decision === 'modified') {
+    payload.edited_text = document.getElementById(`text-${id}`).value;
+  }
+  if (decision === 'rejected') {
+    const noteInput = document.getElementById(`note-input-${id}`);
+    payload.note = noteInput ? noteInput.value : '';
+  }
+
+  const res = await fetch('/api/decisions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+
+  const resultDiv = document.getElementById(`result-${id}`);
+  const card = document.getElementById(`card-${id}`);
+  card.querySelector('.actions').style.display = 'none';
+
+  if (data.posted_url) {
+    resultDiv.innerHTML = `<div class="result posted">✅ Posted to GitHub: <a href="${data.posted_url}" target="_blank">${data.posted_url}</a></div>`;
+  } else {
+    resultDiv.innerHTML = `<div class="result rejected">Rejected — logged, nothing posted to GitHub.</div>`;
+  }
+}
+
+loadQueue();
+</script>
+
+</body>
+</html>
