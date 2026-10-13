@@ -51,6 +51,42 @@ Rather than posting immediately, the agent's findings go into a review queue fir
 
 Every decision, including rejections, is saved permanently to a database — a real audit trail of what the agent suggested versus what a human actually did with it, not just a one-off approval prompt.
 
+## MCP server
+
+The same GitHub lookups the agent uses are also exposed as an MCP server (`app/mcp_server.py`, built on the official Python MCP SDK). That means any MCP client — Claude Desktop, Claude Code — can pull PR context itself, instead of only this agent's fixed pipeline using it.
+
+Three tools, all read-only:
+
+- **`get_pr_details`** — title, author, state, branches, description, and the list of changed files with line counts.
+- **`get_pr_diff`** — the unified diff. Very large diffs are cut at 50,000 characters and flagged as `truncated`, so the model knows it didn't see everything.
+- **`get_commit_history`** — recent commits for one or more files: who changed them, when, and the commit message. This is the same lookup the Reviewer Matcher uses.
+
+It deliberately has no write tools. Posting a comment still only happens through the review dashboard after a human decision — the MCP server doesn't open a way around that.
+
+It reuses `github_client.py` as-is, reads `GITHUB_TOKEN` and `GITHUB_REPO` from the same `.env`, and runs over stdio. GitHub errors (a wrong PR number, a bad token) are passed back to the model as readable messages rather than a generic failure, so it can correct its next call.
+
+**Claude Code:**
+
+```
+claude mcp add --transport stdio --env PYTHONPATH=/path/to/pr-triage-agent-testbed pr-triage -- /path/to/pr-triage-agent-testbed/.venv/bin/python -m app.mcp_server
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "pr-triage": {
+      "command": "/path/to/pr-triage-agent-testbed/.venv/bin/python",
+      "args": ["-m", "app.mcp_server"],
+      "env": { "PYTHONPATH": "/path/to/pr-triage-agent-testbed" }
+    }
+  }
+}
+```
+
+Then ask something like *"Look at PR #3 and tell me if it's safe to merge, and who should review it"* — the model decides which tools to call.
+
 ## How it's built
 
 ```
@@ -66,7 +102,7 @@ GitHub PR → Fetch diff & file history → Three AI/logic steps → Saved to da
 - **Reviewer Matcher** — no AI here on purpose. It's a solved problem: count who's committed to these files before, exclude the PR's own author, suggest the top match. Using an LLM for this would just be unnecessary complexity.
 - **Dashboard & database** — a FastAPI backend with three tables (PRs, suggestions, and human decisions) and a small web UI, so nothing reaches GitHub without an explicit human decision, and every decision is recorded.
 
-**Tech stack:** Python, FastAPI, the Claude API (`anthropic` SDK), GitHub's REST API, PostgreSQL + SQLAlchemy.
+**Tech stack:** Python, FastAPI, the Claude API (`anthropic` SDK), GitHub's REST API, PostgreSQL + SQLAlchemy, Model Context Protocol (`mcp` SDK).
 
 ## Honest limitations (found while building this)
 
@@ -93,3 +129,4 @@ Tools like GitHub Copilot's PR review, CodeRabbit, and Sonar already do AI-assis
 4. Create the database tables: `python create_tables.py`
 5. Run any of the `test_*.py` scripts to see each part of the pipeline individually, or `test_post_comment.py` for the original end-to-end flow (Phase 1 style — posts immediately after a terminal confirmation).
 6. To use the review dashboard instead: start the server with `uvicorn app.main:app --reload`, then open `http://127.0.0.1:8000` in a browser. Trigger a triage via `POST /api/triage/{pr_number}` (e.g. with curl or the included `test_api.py`), then review it in the dashboard.
+7. To use the MCP server, see the [MCP server](#mcp-server) section above for Claude Code and Claude Desktop setup.
