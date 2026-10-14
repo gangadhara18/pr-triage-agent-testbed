@@ -70,6 +70,22 @@ It reuses `github_client.py` as-is, reads `GITHUB_TOKEN` and `GITHUB_REPO` from 
 ```
 claude mcp add --transport stdio --env PYTHONPATH=/path/to/pr-triage-agent-testbed pr-triage -- /path/to/pr-triage-agent-testbed/.venv/bin/python -m app.mcp_server
 ```
+**Claude Code on Windows (PowerShell):** `claude mcp add` can fail on the `--` and `--env` options there. A `.mcp.json` file in the repo root works instead:
+
+```json
+{
+  "mcpServers": {
+    "pr-triage": {
+      "command": "C:\\path\\to\\venv\\Scripts\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "env": { "PYTHONPATH": "C:\\path\\to\\pr-triage-agent-testbed" }
+    }
+  }
+}
+```
+
+Start Claude Code in that folder, approve the server when it asks, and check it with `/mcp`. The file has local paths, so it is not committed.
+
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
